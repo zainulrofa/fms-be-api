@@ -1,0 +1,25 @@
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Local MongoDB key
+docker/mongodb/replica.key
+
+# Go build artifacts
+/bin/
+/vendor/
+*.exe
+*.test
+*.out
+
+# Logs
+*.log
+logs/
+
+# IDE and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
