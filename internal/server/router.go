@@ -8,11 +8,15 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/zainrofa/fms-api/internal/modules/auth"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/readpref"
 )
 
-func NewRouter(client *mongo.Client) *gin.Engine {
+func NewRouter(
+	client *mongo.Client,
+	jwtAccessSecret ...string,
+) *gin.Engine {
 	router := gin.New()
 
 	if err := router.SetTrustedProxies(nil); err != nil {
@@ -56,6 +60,23 @@ func NewRouter(client *mongo.Client) *gin.Engine {
 			"database": "connected",
 		})
 	})
+
+	var secret string
+	if len(jwtAccessSecret) > 0 {
+		secret = jwtAccessSecret[0]
+	}
+
+	authRepository := auth.NewRepository(client.Database("fms"))
+	authService := auth.NewServiceWithJWT(authRepository, secret)
+	authHandler := auth.NewHandler(authService)
+
+	api := router.Group("/api/v1")
+	api.POST("/auth/register", authHandler.Register)
+	api.POST("/auth/login", authHandler.Login)
+
+	protected := api.Group("")
+	protected.Use(JWTAuth(secret))
+	protected.GET("/auth/me", authHandler.Me)
 
 	return router
 }

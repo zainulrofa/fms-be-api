@@ -13,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
+	"github.com/zainrofa/fms-api/internal/config"
 	"github.com/zainrofa/fms-api/internal/database"
 	"github.com/zainrofa/fms-api/internal/server"
 )
@@ -39,18 +40,20 @@ func run() error {
 		)
 	}
 
-	port := os.Getenv("APP_PORT")
-	if port == "" {
-		port = "8080"
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("load application config: %w", err)
 	}
 
-	if os.Getenv("APP_ENV") == "development" {
+	switch cfg.AppEnv {
+	case "development":
 		gin.SetMode(gin.DebugMode)
-	} else {
+	case "test":
+		gin.SetMode(gin.TestMode)
+	case "production":
 		gin.SetMode(gin.ReleaseMode)
 	}
 
-	// Cancel this context when the process receives Ctrl+C or SIGTERM.
 	ctx, stop := signal.NotifyContext(
 		context.Background(),
 		os.Interrupt,
@@ -58,22 +61,17 @@ func run() error {
 	)
 	defer stop()
 
-	// Limit initial MongoDB connection and ping to 10 seconds.
 	connectCtx, cancelConnect := context.WithTimeout(
 		ctx,
 		10*time.Second,
 	)
-	client, err := database.Connect(
-		connectCtx,
-		os.Getenv("MONGODB_URI"),
-	)
+	client, err := database.Connect(connectCtx, cfg.MongoURI)
 	cancelConnect()
 
 	if err != nil {
 		return fmt.Errorf("connect to MongoDB: %w", err)
 	}
 
-	// Always disconnect MongoDB, including when the HTTP server fails.
 	defer func() {
 		disconnectCtx, cancel := context.WithTimeout(
 			context.Background(),
@@ -89,10 +87,29 @@ func run() error {
 		slog.Info("MongoDB disconnected")
 	}()
 
-	router := server.NewRouter(client)
+	// Initialize indexes before accepting HTTP requests.
+	db := client.Database("fms")
+
+	indexCtx, cancelIndexes := context.WithTimeout(
+		ctx,
+		30*time.Second,
+	)
+	err = database.EnsureIndexes(indexCtx, db)
+	cancelIndexes()
+
+	if err != nil {
+		return fmt.Errorf("ensure MongoDB indexes: %w", err)
+	}
+
+	slog.Info(
+		"MongoDB indexes ensured",
+		"database", "fms",
+	)
+
+	router := server.NewRouter(client, cfg.JWTAccessSecret)
 
 	httpServer := &http.Server{
-		Addr:              ":" + port,
+		Addr:              ":" + cfg.AppPort,
 		Handler:           router,
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
@@ -101,7 +118,11 @@ func run() error {
 	serverErrors := make(chan error, 1)
 
 	go func() {
-		slog.Info("HTTP server starting", "port", port)
+		slog.Info(
+			"HTTP server starting",
+			"port", cfg.AppPort,
+			"environment", cfg.AppEnv,
+		)
 		serverErrors <- httpServer.ListenAndServe()
 	}()
 
@@ -119,7 +140,10 @@ func run() error {
 			slog.Error("graceful HTTP shutdown failed", "error", err)
 
 			if closeErr := httpServer.Close(); closeErr != nil {
-				slog.Error("force closing HTTP server failed", "error", closeErr)
+				slog.Error(
+					"force closing HTTP server failed",
+					"error", closeErr,
+				)
 			}
 
 			return fmt.Errorf("shutdown HTTP server: %w", err)
