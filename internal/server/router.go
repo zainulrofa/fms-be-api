@@ -8,7 +8,10 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+
 	"github.com/zainrofa/fms-api/internal/modules/auth"
+	"github.com/zainrofa/fms-api/internal/modules/households"
+
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/readpref"
 )
@@ -70,6 +73,10 @@ func NewRouter(
 	authService := auth.NewServiceWithJWT(authRepository, secret)
 	authHandler := auth.NewHandler(authService)
 
+	householdRepository := households.NewRepository(client.Database("fms"))
+	householdService := households.NewService(householdRepository)
+	householdHandler := households.NewHandler(householdService)
+
 	api := router.Group("/api/v1")
 	api.POST("/auth/register", authHandler.Register)
 	api.POST("/auth/login", authHandler.Login)
@@ -77,6 +84,10 @@ func NewRouter(
 	protected := api.Group("")
 	protected.Use(JWTAuth(secret))
 	protected.GET("/auth/me", authHandler.Me)
+
+	protected.GET("/households", householdHandler.List)
+	protected.GET("/households/:id", householdHandler.GetByID)
+	protected.GET("/households/:id/members", householdHandler.ListMembers)
 
 	return router
 }
